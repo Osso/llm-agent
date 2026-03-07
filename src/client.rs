@@ -13,3 +13,14 @@ pub trait ChatClient: Send + Sync {
         tools: Option<&serde_json::Value>,
     ) -> Result<(Response, Usage), Box<dyn std::error::Error + Send + Sync>>;
 }
+
+#[async_trait::async_trait]
+impl<T: ChatClient> ChatClient for &T {
+    async fn chat(
+        &self,
+        messages: &[ChatMessage],
+        tools: Option<&serde_json::Value>,
+    ) -> Result<(Response, Usage), Box<dyn std::error::Error + Send + Sync>> {
+        (**self).chat(messages, tools).await
+    }
+}

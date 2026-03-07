@@ -3,5 +3,5 @@ mod loop_;
 mod types;
 
 pub use client::ChatClient;
-pub use loop_::AgentLoop;
-pub use types::{ChatMessage, Response, ToolCall, ToolResult, Usage};
+pub use loop_::{AgentLoop, AgentOutput, ToolExecutor};
+pub use types::{ChatMessage, FunctionCall, Response, ToolCall, ToolResult, Usage};

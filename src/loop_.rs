@@ -7,7 +7,15 @@ pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, name: &str, arguments: &str) -> String;
 }
 
+#[async_trait::async_trait]
+impl<T: ToolExecutor> ToolExecutor for &T {
+    async fn execute(&self, name: &str, arguments: &str) -> String {
+        (**self).execute(name, arguments).await
+    }
+}
+
 /// Output of a completed agent loop.
+#[derive(Debug)]
 pub struct AgentOutput {
     /// All parts from every turn, in order.
     pub parts: Vec<Part>,

@@ -1,5 +1,5 @@
 use crate::client::ChatClient;
-use crate::types::{ChatMessage, Response, ToolResult, Usage};
+use crate::types::{ChatMessage, Part, Response, ToolResult, Usage};
 
 /// Callback for executing tool calls.
 #[async_trait::async_trait]
@@ -9,11 +9,28 @@ pub trait ToolExecutor: Send + Sync {
 
 /// Output of a completed agent loop.
 pub struct AgentOutput {
-    pub text: String,
+    /// All parts from every turn, in order.
+    pub parts: Vec<Part>,
     pub usage: Usage,
 }
 
-/// Drives the multi-turn loop: send → tool calls → execute → feed back → repeat.
+impl AgentOutput {
+    /// Final text output (last text parts concatenated).
+    pub fn text(&self) -> String {
+        // Collect text parts from the last response (after the last tool result).
+        let mut last_text = String::new();
+        for part in self.parts.iter().rev() {
+            match part {
+                Part::Text(t) => last_text = format!("{t}{last_text}"),
+                Part::ToolUse(_) => break,
+                _ => {}
+            }
+        }
+        last_text
+    }
+}
+
+/// Drives the multi-turn loop: send → parts → execute tools → feed back → repeat.
 pub struct AgentLoop<C, T> {
     client: C,
     executor: T,
@@ -55,6 +72,7 @@ impl<C: ChatClient, T: ToolExecutor> AgentLoop<C, T> {
     ) -> Result<AgentOutput, Box<dyn std::error::Error + Send + Sync>> {
         let mut messages = build_messages(self.system_prompt.as_deref(), prompt);
         let mut total_usage = Usage::default();
+        let mut all_parts = Vec::new();
 
         for turn in 0..self.max_turns {
             tracing::info!(turn, messages = messages.len(), "agent loop turn");
@@ -63,23 +81,21 @@ impl<C: ChatClient, T: ToolExecutor> AgentLoop<C, T> {
                 .chat(&messages, self.tools_json.as_ref())
                 .await?;
             total_usage.accumulate(&usage);
+            all_parts.extend(response.parts.clone());
 
-            match response {
-                Response::Text(text) => {
-                    return Ok(AgentOutput {
-                        text,
-                        usage: total_usage,
-                    });
-                }
-                Response::ToolCalls { text, calls } => {
-                    let names: Vec<&str> =
-                        calls.iter().map(|c| c.function.name.as_str()).collect();
-                    tracing::info!(turn, "tool calls: {:?}", names);
-
-                    let results = execute_tools(&self.executor, &calls).await;
-                    append_turn(&mut messages, text, calls, results);
-                }
+            if !response.has_tool_calls() {
+                return Ok(AgentOutput {
+                    parts: all_parts,
+                    usage: total_usage,
+                });
             }
+
+            let tool_calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
+            let names: Vec<&str> = tool_calls.iter().map(|c| c.function.name.as_str()).collect();
+            tracing::info!(turn, "tool calls: {:?}", names);
+
+            let results = execute_tools(&self.executor, &tool_calls).await;
+            append_turn(&mut messages, &response, results);
         }
 
         Err(format!("exceeded max turns ({})", self.max_turns).into())
@@ -123,10 +139,12 @@ async fn execute_tools(
 
 fn append_turn(
     messages: &mut Vec<ChatMessage>,
-    text: Option<String>,
-    calls: Vec<crate::types::ToolCall>,
+    response: &Response,
     results: Vec<ToolResult>,
 ) {
+    let text = response.text();
+    let calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
+
     messages.push(ChatMessage {
         role: "assistant".into(),
         content: text,

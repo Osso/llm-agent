@@ -6,6 +6,13 @@ use crate::types::{ChatMessage, Part, Response, ToolResult, Usage};
 #[async_trait::async_trait]
 pub trait ToolExecutor: Send + Sync {
     async fn execute(&self, name: &str, arguments: &str) -> String;
+
+    /// Whether a tool supports parallel execution with other parallel-safe tools.
+    /// Read-only tools (grep, read, glob) should return true.
+    /// Mutating tools (bash, write) should return false (default).
+    fn supports_parallel(&self, _tool_name: &str) -> bool {
+        false
+    }
 }
 
 #[async_trait::async_trait]
@@ -146,36 +153,59 @@ fn build_messages(system_prompt: Option<&str>, user_prompt: &str) -> Vec<ChatMes
     messages
 }
 
+async fn execute_single_tool(
+    executor: &(dyn ToolExecutor + '_),
+    hook: &(dyn ToolHook + '_),
+    call: &crate::types::ToolCall,
+    turn: u32,
+) -> Result<ToolResult, Box<dyn std::error::Error + Send + Sync>> {
+    let name = &call.function.name;
+    let args = &call.function.arguments;
+    let ctx = HookContext { tool_name: name, arguments: args, turn };
+    let output = match hook.pre_execute(&ctx).await? {
+        HookDecision::Allow => {
+            let out = executor.execute(name, args).await;
+            tracing::info!(tool = %name, "result: {} bytes", out.len());
+            out
+        }
+        HookDecision::Block(msg) => {
+            tracing::info!(tool = %name, "blocked: {}", msg);
+            msg
+        }
+        HookDecision::Ask { reason, .. } => {
+            tracing::info!(tool = %name, "ask (denied in headless): {}", reason);
+            format!("Tool call denied: {reason}")
+        }
+    };
+    Ok(ToolResult { tool_call_id: call.id.clone(), output })
+}
+
 async fn execute_tools_with_hook(
     executor: &dyn ToolExecutor,
     hook: &dyn ToolHook,
     calls: &[crate::types::ToolCall],
     turn: u32,
 ) -> Result<Vec<ToolResult>, Box<dyn std::error::Error + Send + Sync>> {
+    let all_parallel = calls
+        .iter()
+        .all(|c| executor.supports_parallel(&c.function.name));
+
+    if all_parallel && calls.len() > 1 {
+        tracing::info!(count = calls.len(), "executing tools in parallel");
+        let futures: Vec<_> = calls
+            .iter()
+            .map(|call| execute_single_tool(executor, hook, call, turn))
+            .collect();
+        let results: Result<Vec<_>, _> = futures::future::join_all(futures)
+            .await
+            .into_iter()
+            .collect();
+        return results;
+    }
+
     let mut results = Vec::with_capacity(calls.len());
     for call in calls {
-        let name = &call.function.name;
-        let args = &call.function.arguments;
-        let ctx = HookContext { tool_name: name, arguments: args, turn };
-        let output = match hook.pre_execute(&ctx).await? {
-            HookDecision::Allow => {
-                let out = executor.execute(name, args).await;
-                tracing::info!(tool = %name, "result: {} bytes", out.len());
-                out
-            }
-            HookDecision::Block(msg) => {
-                tracing::info!(tool = %name, "blocked: {}", msg);
-                msg
-            }
-            HookDecision::Ask { reason, .. } => {
-                tracing::info!(tool = %name, "ask (denied in headless): {}", reason);
-                format!("Tool call denied: {reason}")
-            }
-        };
-        results.push(ToolResult {
-            tool_call_id: call.id.clone(),
-            output,
-        });
+        results.push(execute_single_tool(executor, hook, call, turn).await?);
     }
     Ok(results)
 }

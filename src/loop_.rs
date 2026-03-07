@@ -1,4 +1,5 @@
 use crate::client::ChatClient;
+use crate::hook::{AllowAll, HookContext, HookDecision, ToolHook};
 use crate::types::{ChatMessage, Part, Response, ToolResult, Usage};
 
 /// Callback for executing tool calls.
@@ -25,7 +26,6 @@ pub struct AgentOutput {
 impl AgentOutput {
     /// Final text output (last text parts concatenated).
     pub fn text(&self) -> String {
-        // Collect text parts from the last response (after the last tool result).
         let mut last_text = String::new();
         for part in self.parts.iter().rev() {
             match part {
@@ -39,22 +39,37 @@ impl AgentOutput {
 }
 
 /// Drives the multi-turn loop: send → parts → execute tools → feed back → repeat.
-pub struct AgentLoop<C, T> {
+pub struct AgentLoop<C, T, H = AllowAll> {
     client: C,
     executor: T,
+    hook: H,
     tools_json: Option<serde_json::Value>,
     system_prompt: Option<String>,
     max_turns: u32,
 }
 
-impl<C: ChatClient, T: ToolExecutor> AgentLoop<C, T> {
+impl<C: ChatClient, T: ToolExecutor> AgentLoop<C, T, AllowAll> {
     pub fn new(client: C, executor: T) -> Self {
         Self {
             client,
             executor,
+            hook: AllowAll,
             tools_json: None,
             system_prompt: None,
             max_turns: 20,
+        }
+    }
+}
+
+impl<C: ChatClient, T: ToolExecutor, H: ToolHook> AgentLoop<C, T, H> {
+    pub fn with_hook<H2: ToolHook>(self, hook: H2) -> AgentLoop<C, T, H2> {
+        AgentLoop {
+            client: self.client,
+            executor: self.executor,
+            hook,
+            tools_json: self.tools_json,
+            system_prompt: self.system_prompt,
+            max_turns: self.max_turns,
         }
     }
 
@@ -102,7 +117,9 @@ impl<C: ChatClient, T: ToolExecutor> AgentLoop<C, T> {
             let names: Vec<&str> = tool_calls.iter().map(|c| c.function.name.as_str()).collect();
             tracing::info!(turn, "tool calls: {:?}", names);
 
-            let results = execute_tools(&self.executor, &tool_calls).await;
+            let results = execute_tools_with_hook(
+                &self.executor, &self.hook, &tool_calls, turn as u32,
+            ).await?;
             append_turn(&mut messages, &response, results);
         }
 
@@ -129,20 +146,38 @@ fn build_messages(system_prompt: Option<&str>, user_prompt: &str) -> Vec<ChatMes
     messages
 }
 
-async fn execute_tools(
+async fn execute_tools_with_hook(
     executor: &dyn ToolExecutor,
+    hook: &dyn ToolHook,
     calls: &[crate::types::ToolCall],
-) -> Vec<ToolResult> {
+    turn: u32,
+) -> Result<Vec<ToolResult>, Box<dyn std::error::Error + Send + Sync>> {
     let mut results = Vec::with_capacity(calls.len());
     for call in calls {
-        let output = executor.execute(&call.function.name, &call.function.arguments).await;
-        tracing::info!(tool = %call.function.name, "result: {} bytes", output.len());
+        let name = &call.function.name;
+        let args = &call.function.arguments;
+        let ctx = HookContext { tool_name: name, arguments: args, turn };
+        let output = match hook.pre_execute(&ctx).await? {
+            HookDecision::Allow => {
+                let out = executor.execute(name, args).await;
+                tracing::info!(tool = %name, "result: {} bytes", out.len());
+                out
+            }
+            HookDecision::Block(msg) => {
+                tracing::info!(tool = %name, "blocked: {}", msg);
+                msg
+            }
+            HookDecision::Ask { reason, .. } => {
+                tracing::info!(tool = %name, "ask (denied in headless): {}", reason);
+                format!("Tool call denied: {reason}")
+            }
+        };
         results.push(ToolResult {
             tool_call_id: call.id.clone(),
             output,
         });
     }
-    results
+    Ok(results)
 }
 
 fn append_turn(

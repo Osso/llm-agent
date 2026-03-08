@@ -1,5 +1,5 @@
 use crate::client::ChatClient;
-use crate::hook::{AllowAll, HookContext, HookDecision, ToolHook};
+use crate::hook::{AllowAll, HookContext, HookDecision, NoObserver, ToolHook, TurnObserver};
 use crate::types::{ChatMessage, Part, Response, ToolResult, Usage};
 
 /// Callback for executing tool calls.
@@ -46,21 +46,23 @@ impl AgentOutput {
 }
 
 /// Drives the multi-turn loop: send → parts → execute tools → feed back → repeat.
-pub struct AgentLoop<C, T, H = AllowAll> {
+pub struct AgentLoop<C, T, H = AllowAll, O = NoObserver> {
     client: C,
     executor: T,
     hook: H,
+    observer: O,
     tools_json: Option<serde_json::Value>,
     system_prompt: Option<String>,
     max_turns: u32,
 }
 
-impl<C: ChatClient, T: ToolExecutor> AgentLoop<C, T, AllowAll> {
+impl<C: ChatClient, T: ToolExecutor> AgentLoop<C, T, AllowAll, NoObserver> {
     pub fn new(client: C, executor: T) -> Self {
         Self {
             client,
             executor,
             hook: AllowAll,
+            observer: NoObserver,
             tools_json: None,
             system_prompt: None,
             max_turns: 20,
@@ -68,12 +70,25 @@ impl<C: ChatClient, T: ToolExecutor> AgentLoop<C, T, AllowAll> {
     }
 }
 
-impl<C: ChatClient, T: ToolExecutor, H: ToolHook> AgentLoop<C, T, H> {
-    pub fn with_hook<H2: ToolHook>(self, hook: H2) -> AgentLoop<C, T, H2> {
+impl<C: ChatClient, T: ToolExecutor, H: ToolHook, O: TurnObserver> AgentLoop<C, T, H, O> {
+    pub fn with_hook<H2: ToolHook>(self, hook: H2) -> AgentLoop<C, T, H2, O> {
         AgentLoop {
             client: self.client,
             executor: self.executor,
             hook,
+            observer: self.observer,
+            tools_json: self.tools_json,
+            system_prompt: self.system_prompt,
+            max_turns: self.max_turns,
+        }
+    }
+
+    pub fn with_observer<O2: TurnObserver>(self, observer: O2) -> AgentLoop<C, T, H, O2> {
+        AgentLoop {
+            client: self.client,
+            executor: self.executor,
+            hook: self.hook,
+            observer,
             tools_json: self.tools_json,
             system_prompt: self.system_prompt,
             max_turns: self.max_turns,
@@ -111,6 +126,7 @@ impl<C: ChatClient, T: ToolExecutor, H: ToolHook> AgentLoop<C, T, H> {
                 .chat(&messages, self.tools_json.as_ref())
                 .await?;
             total_usage.accumulate(&usage);
+            self.observer.on_turn(turn, &response, &total_usage);
             all_parts.extend(response.parts.clone());
 
             if !response.has_tool_calls() {

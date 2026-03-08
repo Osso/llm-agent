@@ -39,6 +39,18 @@ impl<T: ToolHook> ToolHook for &T {
     }
 }
 
+/// Observer called after each turn in the agent loop.
+pub trait TurnObserver: Send + Sync {
+    fn on_turn(&self, turn: u32, response: &crate::types::Response, usage: &crate::types::Usage);
+}
+
+/// No-op observer that does nothing.
+pub struct NoObserver;
+
+impl TurnObserver for NoObserver {
+    fn on_turn(&self, _turn: u32, _response: &crate::types::Response, _usage: &crate::types::Usage) {}
+}
+
 /// No-op hook that allows everything.
 pub struct AllowAll;
 

@@ -8,7 +8,11 @@ use llm_agent::*;
 #[tokio::test]
 async fn blocked_tool_feeds_message_as_result() {
     let client = CapturingClient::new(vec![
-        tool_response(vec![make_tool_call("c1", "Bash", r#"{"command":"rm -rf /"}"#)]),
+        tool_response(vec![make_tool_call(
+            "c1",
+            "Bash",
+            r#"{"command":"rm -rf /"}"#,
+        )]),
         text_response("ok I won't do that"),
     ]);
     let executor = MockExecutor::new("should not run");
@@ -18,7 +22,10 @@ async fn blocked_tool_feeds_message_as_result() {
     assert_eq!(output.text(), "ok I won't do that");
     assert!(executor.called().is_empty());
     let captured = client.messages.lock().unwrap();
-    assert_eq!(captured[1][2].content.as_deref(), Some("Bash is not allowed"));
+    assert_eq!(
+        captured[1][2].content.as_deref(),
+        Some("Bash is not allowed")
+    );
 }
 
 #[tokio::test]
@@ -68,9 +75,9 @@ async fn ask_with_suggestion() {
 
 #[tokio::test]
 async fn hook_error_aborts_loop() {
-    let client = MockClient::new(vec![
-        tool_response(vec![make_tool_call("c1", "Bash", "{}")]),
-    ]);
+    let client = MockClient::new(vec![tool_response(vec![make_tool_call(
+        "c1", "Bash", "{}",
+    )])]);
     let agent = AgentLoop::new(&client, NoOpExecutor).with_hook(FailingHook);
     let err = agent.run("go").await.unwrap_err();
 

@@ -55,28 +55,47 @@ pub struct Response {
 impl Response {
     /// Extract all text parts concatenated.
     pub fn text(&self) -> Option<String> {
-        let texts: Vec<&str> = self.parts.iter().filter_map(|p| match p {
-            Part::Text(t) => Some(t.as_str()),
-            _ => None,
-        }).collect();
-        if texts.is_empty() { None } else { Some(texts.join("")) }
+        let texts: Vec<&str> = self
+            .parts
+            .iter()
+            .filter_map(|p| match p {
+                Part::Text(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        if texts.is_empty() {
+            None
+        } else {
+            Some(texts.join(""))
+        }
     }
 
     /// Extract all reasoning parts concatenated.
     pub fn reasoning(&self) -> Option<String> {
-        let parts: Vec<&str> = self.parts.iter().filter_map(|p| match p {
-            Part::Reasoning(t) => Some(t.as_str()),
-            _ => None,
-        }).collect();
-        if parts.is_empty() { None } else { Some(parts.join("")) }
+        let parts: Vec<&str> = self
+            .parts
+            .iter()
+            .filter_map(|p| match p {
+                Part::Reasoning(t) => Some(t.as_str()),
+                _ => None,
+            })
+            .collect();
+        if parts.is_empty() {
+            None
+        } else {
+            Some(parts.join(""))
+        }
     }
 
     /// Extract all tool calls.
     pub fn tool_calls(&self) -> Vec<&ToolCall> {
-        self.parts.iter().filter_map(|p| match p {
-            Part::ToolUse(tc) => Some(tc),
-            _ => None,
-        }).collect()
+        self.parts
+            .iter()
+            .filter_map(|p| match p {
+                Part::ToolUse(tc) => Some(tc),
+                _ => None,
+            })
+            .collect()
     }
 
     /// Whether the model wants to continue (has tool calls).

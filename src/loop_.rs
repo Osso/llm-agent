@@ -137,12 +137,15 @@ impl<C: ChatClient, T: ToolExecutor, H: ToolHook, O: TurnObserver> AgentLoop<C, 
             }
 
             let tool_calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
-            let names: Vec<&str> = tool_calls.iter().map(|c| c.function.name.as_str()).collect();
+            let names: Vec<&str> = tool_calls
+                .iter()
+                .map(|c| c.function.name.as_str())
+                .collect();
             tracing::info!(turn, "tool calls: {:?}", names);
 
-            let results = execute_tools_with_hook(
-                &self.executor, &self.hook, &tool_calls, turn as u32,
-            ).await?;
+            let results =
+                execute_tools_with_hook(&self.executor, &self.hook, &tool_calls, turn as u32)
+                    .await?;
             append_turn(&mut messages, &response, results);
         }
 
@@ -177,7 +180,11 @@ async fn execute_single_tool(
 ) -> Result<ToolResult, Box<dyn std::error::Error + Send + Sync>> {
     let name = &call.function.name;
     let args = &call.function.arguments;
-    let ctx = HookContext { tool_name: name, arguments: args, turn };
+    let ctx = HookContext {
+        tool_name: name,
+        arguments: args,
+        turn,
+    };
     let output = match hook.pre_execute(&ctx).await? {
         HookDecision::Allow => {
             let out = executor.execute(name, args).await;
@@ -193,7 +200,10 @@ async fn execute_single_tool(
             format!("Tool call denied: {reason}")
         }
     };
-    Ok(ToolResult { tool_call_id: call.id.clone(), output })
+    Ok(ToolResult {
+        tool_call_id: call.id.clone(),
+        output,
+    })
 }
 
 async fn execute_tools_with_hook(
@@ -226,11 +236,7 @@ async fn execute_tools_with_hook(
     Ok(results)
 }
 
-fn append_turn(
-    messages: &mut Vec<ChatMessage>,
-    response: &Response,
-    results: Vec<ToolResult>,
-) {
+fn append_turn(messages: &mut Vec<ChatMessage>, response: &Response, results: Vec<ToolResult>) {
     let text = response.text();
     let calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
 

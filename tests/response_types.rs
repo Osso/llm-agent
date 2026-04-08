@@ -79,8 +79,16 @@ fn mixed_parts() {
 
 #[test]
 fn usage_accumulate() {
-    let mut u = Usage { input_tokens: 10, output_tokens: 5, reasoning_tokens: 2 };
-    u.accumulate(&Usage { input_tokens: 20, output_tokens: 10, reasoning_tokens: 3 });
+    let mut u = Usage {
+        input_tokens: 10,
+        output_tokens: 5,
+        reasoning_tokens: 2,
+    };
+    u.accumulate(&Usage {
+        input_tokens: 20,
+        output_tokens: 10,
+        reasoning_tokens: 3,
+    });
     assert_eq!(u.input_tokens, 30);
     assert_eq!(u.output_tokens, 15);
     assert_eq!(u.reasoning_tokens, 5);

@@ -92,9 +92,10 @@ async fn usage_accumulated_across_turns() {
 
 #[tokio::test]
 async fn reasoning_parts_collected() {
-    let client = MockClient::new(vec![
-        reasoning_then_text("let me think", "the answer is 42"),
-    ]);
+    let client = MockClient::new(vec![reasoning_then_text(
+        "let me think",
+        "the answer is 42",
+    )]);
     let agent = AgentLoop::new(&client, NoOpExecutor);
     let output = agent.run("meaning of life").await.unwrap();
 
@@ -136,13 +137,17 @@ async fn client_error_propagates() {
     #[async_trait::async_trait]
     impl ChatClient for FailClient {
         async fn chat(
-            &self, _: &[ChatMessage], _: Option<&serde_json::Value>,
+            &self,
+            _: &[ChatMessage],
+            _: Option<&serde_json::Value>,
         ) -> Result<(Response, Usage), Box<dyn std::error::Error + Send + Sync>> {
             Err("API error".into())
         }
     }
 
     let err = AgentLoop::new(&FailClient, NoOpExecutor)
-        .run("hi").await.unwrap_err();
+        .run("hi")
+        .await
+        .unwrap_err();
     assert_eq!(err.to_string(), "API error");
 }

@@ -48,7 +48,13 @@ pub trait TurnObserver: Send + Sync {
 pub struct NoObserver;
 
 impl TurnObserver for NoObserver {
-    fn on_turn(&self, _turn: u32, _response: &crate::types::Response, _usage: &crate::types::Usage) {}
+    fn on_turn(
+        &self,
+        _turn: u32,
+        _response: &crate::types::Response,
+        _usage: &crate::types::Usage,
+    ) {
+    }
 }
 
 /// No-op hook that allows everything.

@@ -1,6 +1,6 @@
 use llm_agent::*;
-use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 pub fn make_tool_call(id: &str, name: &str, args: &str) -> ToolCall {
     ToolCall {
@@ -39,10 +39,7 @@ pub fn tool_response_with_text(text: &str, calls: Vec<ToolCall>) -> Response {
 
 pub fn reasoning_then_text(reasoning: &str, text: &str) -> Response {
     Response {
-        parts: vec![
-            Part::Reasoning(reasoning.into()),
-            Part::Text(text.into()),
-        ],
+        parts: vec![Part::Reasoning(reasoning.into()), Part::Text(text.into())],
         finish_reason: "stop".into(),
     }
 }
@@ -75,7 +72,14 @@ impl ChatClient for MockClient {
     ) -> Result<(Response, Usage), Box<dyn std::error::Error + Send + Sync>> {
         self.call_count.fetch_add(1, Ordering::SeqCst);
         let resp = self.responses.lock().unwrap().remove(0);
-        Ok((resp, Usage { input_tokens: 10, output_tokens: 5, reasoning_tokens: 0 }))
+        Ok((
+            resp,
+            Usage {
+                input_tokens: 10,
+                output_tokens: 5,
+                reasoning_tokens: 0,
+            },
+        ))
     }
 }
 
@@ -101,7 +105,10 @@ impl MockExecutor {
 #[async_trait::async_trait]
 impl ToolExecutor for MockExecutor {
     async fn execute(&self, name: &str, arguments: &str) -> String {
-        self.calls.lock().unwrap().push((name.into(), arguments.into()));
+        self.calls
+            .lock()
+            .unwrap()
+            .push((name.into(), arguments.into()));
         self.output.clone()
     }
 }

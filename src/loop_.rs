@@ -110,6 +110,28 @@ impl<C: ChatClient, T: ToolExecutor, H: ToolHook, O: TurnObserver> AgentLoop<C, 
         self
     }
 
+    async fn execute_turn(
+        &self,
+        turn: u32,
+        messages: &[ChatMessage],
+        total_usage: &mut Usage,
+        all_parts: &mut Vec<Part>,
+    ) -> Result<Response, Box<dyn std::error::Error + Send + Sync>> {
+        tracing::info!(turn, messages = messages.len(), "agent loop turn");
+        let (response, usage) = self.client.chat(messages, self.tools_json.as_ref()).await?;
+        total_usage.accumulate(&usage);
+        self.observer.on_turn(turn, &response, total_usage);
+        all_parts.extend(response.parts.clone());
+        Ok(response)
+    }
+
+    fn collect_tool_calls(&self, response: &Response, turn: u32) -> Vec<crate::types::ToolCall> {
+        let calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
+        let names: Vec<&str> = calls.iter().map(|c| c.function.name.as_str()).collect();
+        tracing::info!(turn, "tool calls: {:?}", names);
+        calls
+    }
+
     /// Run the agentic loop to completion.
     pub async fn run(
         &self,
@@ -120,14 +142,9 @@ impl<C: ChatClient, T: ToolExecutor, H: ToolHook, O: TurnObserver> AgentLoop<C, 
         let mut all_parts = Vec::new();
 
         for turn in 0..self.max_turns {
-            tracing::info!(turn, messages = messages.len(), "agent loop turn");
-            let (response, usage) = self
-                .client
-                .chat(&messages, self.tools_json.as_ref())
+            let response = self
+                .execute_turn(turn, &messages, &mut total_usage, &mut all_parts)
                 .await?;
-            total_usage.accumulate(&usage);
-            self.observer.on_turn(turn, &response, &total_usage);
-            all_parts.extend(response.parts.clone());
 
             if !response.has_tool_calls() {
                 return Ok(AgentOutput {
@@ -136,12 +153,7 @@ impl<C: ChatClient, T: ToolExecutor, H: ToolHook, O: TurnObserver> AgentLoop<C, 
                 });
             }
 
-            let tool_calls: Vec<_> = response.tool_calls().into_iter().cloned().collect();
-            let names: Vec<&str> = tool_calls
-                .iter()
-                .map(|c| c.function.name.as_str())
-                .collect();
-            tracing::info!(turn, "tool calls: {:?}", names);
+            let tool_calls = self.collect_tool_calls(&response, turn);
 
             let results =
                 execute_tools_with_hook(&self.executor, &self.hook, &tool_calls, turn as u32)

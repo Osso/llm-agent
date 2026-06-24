@@ -125,6 +125,7 @@ impl ToolExecutor for NoOpExecutor {
 /// Client that captures all message arrays passed to chat().
 pub struct CapturingClient {
     pub messages: Arc<std::sync::Mutex<Vec<Vec<ChatMessage>>>>,
+    pub tools: Arc<std::sync::Mutex<Vec<Option<serde_json::Value>>>>,
     responses: std::sync::Mutex<Vec<Response>>,
 }
 
@@ -132,6 +133,7 @@ impl CapturingClient {
     pub fn new(responses: Vec<Response>) -> Self {
         Self {
             messages: Arc::new(std::sync::Mutex::new(Vec::new())),
+            tools: Arc::new(std::sync::Mutex::new(Vec::new())),
             responses: std::sync::Mutex::new(responses),
         }
     }
@@ -142,9 +144,10 @@ impl ChatClient for CapturingClient {
     async fn chat(
         &self,
         msgs: &[ChatMessage],
-        _tools: Option<&serde_json::Value>,
+        tools: Option<&serde_json::Value>,
     ) -> Result<(Response, Usage), Box<dyn std::error::Error + Send + Sync>> {
         self.messages.lock().unwrap().push(msgs.to_vec());
+        self.tools.lock().unwrap().push(tools.cloned());
         let resp = self.responses.lock().unwrap().remove(0);
         Ok((resp, Usage::default()))
     }

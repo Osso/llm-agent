@@ -2,6 +2,7 @@ mod common;
 
 use common::*;
 use llm_agent::*;
+use std::sync::{Arc, Mutex};
 
 #[tokio::test]
 async fn single_turn_text_response() {
@@ -50,6 +51,49 @@ async fn multiple_tool_calls_in_one_turn() {
 }
 
 #[tokio::test]
+async fn parallel_safe_tool_calls_execute_in_one_turn() {
+    struct ParallelExecutor {
+        calls: Mutex<Vec<String>>,
+    }
+
+    #[async_trait::async_trait]
+    impl ToolExecutor for ParallelExecutor {
+        async fn execute(&self, name: &str, arguments: &str) -> String {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(format!("{name}:{arguments}"));
+            "ok".to_string()
+        }
+
+        fn supports_parallel(&self, _tool_name: &str) -> bool {
+            true
+        }
+    }
+
+    let client = MockClient::new(vec![
+        tool_response(vec![
+            make_tool_call("c1", "Read", r#"{"path":"a.txt"}"#),
+            make_tool_call("c2", "Glob", r#"{"pattern":"*.rs"}"#),
+        ]),
+        text_response("done"),
+    ]);
+    let executor = ParallelExecutor {
+        calls: Mutex::new(Vec::new()),
+    };
+
+    AgentLoop::new(&client, &executor)
+        .run("read both")
+        .await
+        .unwrap();
+
+    let calls = executor.calls.lock().unwrap();
+    assert_eq!(calls.len(), 2);
+    assert!(calls.contains(&r#"Read:{"path":"a.txt"}"#.to_string()));
+    assert!(calls.contains(&r#"Glob:{"pattern":"*.rs"}"#.to_string()));
+}
+
+#[tokio::test]
 async fn multi_turn_tool_calls() {
     let client = MockClient::new(vec![
         tool_response(vec![make_tool_call("c1", "Read", "{}")]),
@@ -88,6 +132,71 @@ async fn usage_accumulated_across_turns() {
 
     assert_eq!(output.usage.input_tokens, 20);
     assert_eq!(output.usage.output_tokens, 10);
+}
+
+#[tokio::test]
+async fn observer_receives_each_turn_with_accumulated_usage() {
+    struct RecordingObserver {
+        turns: Arc<Mutex<Vec<(u32, String, u64)>>>,
+    }
+
+    impl TurnObserver for RecordingObserver {
+        fn on_turn(&self, turn: u32, response: &Response, usage: &Usage) {
+            self.turns.lock().unwrap().push((
+                turn,
+                response.finish_reason.clone(),
+                usage.input_tokens,
+            ));
+        }
+    }
+
+    let observer = RecordingObserver {
+        turns: Arc::new(Mutex::new(Vec::new())),
+    };
+    let turns = Arc::clone(&observer.turns);
+    let client = MockClient::new(vec![
+        tool_response(vec![make_tool_call("c1", "Read", "{}")]),
+        text_response("done"),
+    ]);
+
+    AgentLoop::new(&client, MockExecutor::new("ok"))
+        .with_observer(observer)
+        .run("watch")
+        .await
+        .unwrap();
+
+    let turns = turns.lock().unwrap();
+    assert_eq!(
+        turns.as_slice(),
+        &[
+            (0, "tool_calls".to_string(), 10),
+            (1, "stop".to_string(), 20)
+        ]
+    );
+}
+
+#[tokio::test]
+async fn tools_json_is_forwarded_to_client_each_turn() {
+    let tools = serde_json::json!([
+        {
+            "name": "Read",
+            "description": "read a file",
+            "input_schema": {"type": "object"}
+        }
+    ]);
+    let client = CapturingClient::new(vec![
+        tool_response(vec![make_tool_call("c1", "Read", "{}")]),
+        text_response("done"),
+    ]);
+
+    AgentLoop::new(&client, MockExecutor::new("ok"))
+        .tools_json(tools.clone())
+        .run("read")
+        .await
+        .unwrap();
+
+    let captured = client.tools.lock().unwrap();
+    assert_eq!(captured.as_slice(), &[Some(tools.clone()), Some(tools)]);
 }
 
 #[tokio::test]
